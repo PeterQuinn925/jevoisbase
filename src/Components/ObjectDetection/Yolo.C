@@ -19,8 +19,8 @@
 #include <jevois/Core/Module.H>
 
 // ####################################################################################################
-Yolo::Yolo(std::string const & instance) : jevois::Component(instance), net(nullptr), names(nullptr), boxes(nullptr),
-    probs(nullptr), classes(0), itsReady(false)
+Yolo::Yolo(std::string const & instance) : jevois::Component(instance), net(nullptr), names(nullptr), dets(nullptr), classes(0),
+    itsReady(false)//pdq was boxes(nullptr), probs(nullptr), classes(0) ----replaced by dets
 {
   // Get NNPACK ready to rock:
 #ifdef NNPACK
@@ -41,7 +41,7 @@ void Yolo::postInit()
 {
   itsReadyFut = std::async(std::launch::async, [&]() {
       std::string root = dataroot::get(); if (root.empty() == false) root += '/';
-  
+
       // Note: darknet expects read/write pointers to the file names...
       std::string const datacf = absolutePath(root + datacfg::get());
       std::string const cfgfil = absolutePath(root + cfgfile::get());
@@ -63,11 +63,10 @@ void Yolo::postInit()
       net = load_network(const_cast<char *>(cfgfil.c_str()), const_cast<char *>(weightfil.c_str()), 0);
       if (net == nullptr) LFATAL("Failed to load darknet network and/or weights -- ABORT");
       classes = option_find_int(options, "classes", 2);
-
       set_batch_network(net, 1);
       srand(2222222);
       LINFO("YOLO network ready");
-  
+
 #ifdef DARKNET_NNPACK
       net->threadpool = pthreadpool_create(threads::get());
 #endif
@@ -80,10 +79,14 @@ void Yolo::postInit()
 void Yolo::postUninit()
 {
   try { itsReadyFut.get(); } catch (...) { }
-
+  free_ptrs((void**)names,classes);
+if (dets) {
+  free_detections(dets,sizeof(dets)/sizeof(dets[0]));
+} /*i might need to do more for probs, but leaving for now
+/*replaced by dets (pdq)
   if (boxes) { free(boxes); boxes = nullptr; }
   if (probs) { layer & l = net->layers[net->n-1]; free_ptrs((void **)probs, l.w * l.h * l.n); probs = nullptr; }
-
+*/
   if (net)
   {
 #ifdef DARKNET_NNPACK
@@ -92,7 +95,6 @@ void Yolo::postUninit()
     free_network(net);
   }
 
-  free_ptrs((void**)names, classes);
 }
 
 // ####################################################################################################
@@ -100,7 +102,7 @@ float Yolo::predict(cv::Mat const & cvimg)
 {
   if (itsReady.load() == false) throw std::logic_error("not ready yet...");
   if (cvimg.type() != CV_8UC3) LFATAL("cvimg must have type CV_8UC3 and RGB pixels");
-  
+
   int const c = 3; // color channels
   int const w = cvimg.cols;
   int const h = cvimg.rows;
@@ -127,7 +129,7 @@ float Yolo::predict(image & im)
 {
   image sized; bool need_free = false;
   if (im.w == net->w && im.h == net->h) sized = im; else { sized = letterbox_image(im, net->w, net->h); need_free = true; }
-      
+
   struct timeval start, stop;
 
   gettimeofday(&start, 0);
@@ -146,19 +148,34 @@ void Yolo::computeBoxes(int inw, int inh)
 {
   layer & l = net->layers[net->n-1];
 
+/* replaced by dets
   if (boxes == nullptr)
     boxes = (box *)calloc(l.w * l.h * l.n, sizeof(box));
 
   if (probs == nullptr)
   {
     probs = (float **)calloc(l.w * l.h * l.n, sizeof(float *));
-    for (int j = 0; j < l.w * l.h * l.n; ++j) probs[j] = (float *)calloc(l.classes + 1, sizeof(float));
-  }
+        for (int j = 0; j < l.w * l.h * l.n; ++j) Yolo::probs[j] = (float *)calloc(l.classes + 1, sizeof(float));
+  } */
 
-  get_region_boxes(l, inw, inh, net->w, net->h, thresh::get()*0.01F, probs, boxes, 0, 0, 0, hierthresh::get()*0.01F, 1);
-  
+  if (dets = nullptr)
+{
+  dets = ( struct detection * )calloc(l.w * l.h * l.n, sizeof(detection)); /*added pdq*/
+  for (int j = 0; j < l.w * l.h * l.n; ++j) dets[j].prob = (float *)calloc(l.classes + 1, sizeof(float));
+}
+get_detection_detections(l, inw, inh, thresh::get()*0.01F, dets);
+  get_region_detections(l, inw, inh, net->w, net->h, thresh::get()*0.01F, l.map, hierthresh::get()*0.01F, 1, dets);
+  /* pdq code change for yolov3
+was
+get_region_boxes(l, inw, inh, net->w, net->h, thresh::get()*0.01F, probs, boxes, 0, 0, 0, hierthresh::get()*0.01F, 1);
+new function is get_region_detections
+*/
+  dets->classes=classes;
   float const nmsval = nms::get()*0.01F;
-  if (nmsval) do_nms_obj(boxes, probs, l.w * l.h * l.n, l.classes, nmsval);
+  int total;
+  if (nmsval) do_nms_obj(dets, total, l.classes, thresh::get()*0.01F);/*pdq changes.
+was  do_nms_obj(boxes, probs, l.w * l.h * l.n, l.classes, nmsval)
+*/
 }
 
 // ####################################################################################################
@@ -169,15 +186,15 @@ void Yolo::drawDetections(jevois::RawImage & outimg, int inw, int inh, int xoff,
 
   float const thval = thresh::get();
   float const hthval = hierthresh::get();
-  
+
   for (int i = 0; i < num; ++i)
   {
-    int const cls = max_index(probs[i], l.classes);
-    float const prob = probs[i][cls] * 100.0F;
+    int const cls = max_index(dets[i].prob, l.classes);
+    float const prob = dets[i].prob[cls] * 100.0F;
 
     if (prob > thval)
     {
-      box const & b = boxes[i];
+      box const & b = dets[i].bbox;
 
       int const left = xoff + (b.x - b.w / 2.0F) * inw;
       int const bw = b.w * inw;
@@ -201,21 +218,21 @@ void Yolo::sendSerial(jevois::StdModule * mod, int inw, int inh, unsigned long f
 
   float const thval = thresh::get();
   float const hthval = hierthresh::get();
-  
+
   for (int i = 0; i < num; ++i)
   {
-    int const cls = max_index(probs[i], l.classes);
-    float const prob = probs[i][cls] * 100.0F;
+    int const cls = max_index(dets[i].prob, l.classes);
+    float const prob = dets[i].prob[cls] * 100.0F;
 
     if (prob > thval)
     {
-      box const & b = boxes[i];
+      box const & b = dets[i].bbox;
 
       int const left = (b.x - b.w / 2.0F) * inw;
       int const bw = b.w * inw;
       int const top = (b.y - b.h / 2.0F) * inh;
       int const bh = b.h * inh;
-      
+
       mod->sendSerialImg2D(inw, inh, left, top, bw, bh, names[cls], jevois::sformat("%.1f", prob));
     }
   }
