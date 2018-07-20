@@ -38,7 +38,7 @@ namespace yolo
                            "the module's path.",
                            JEVOIS_SHARE_PATH "/darknet/yolo", ParamCateg);
 
-  
+
   //! Parameter \relates Yolo
   JEVOIS_DECLARE_PARAMETER(datacfg, std::string, "Data configuration file (if relative, relative to dataroot)",
                            "cfg/voc.data", ParamCateg);
@@ -91,7 +91,7 @@ class Yolo : public jevois::Component,
              jevois::Parameter<yolo::dataroot, yolo::datacfg, yolo::cfgfile, yolo::weightfile, yolo::namefile,
                                yolo::nms, yolo::thresh, yolo::hierthresh, yolo::threads>
 {
-  public: 
+  public:
     //! Constructor
     Yolo(std::string const & instance);
 
@@ -110,7 +110,7 @@ class Yolo : public jevois::Component,
         letterboxed if necessary to fit network input dims. Returns the prediction time (neural net forward pass) in
         milliseconds. Throws std::logic_error if the network is still loading and not ready. */
     float predict(cv::Mat const & cvimg);
-    
+
     //! Processing function, results are stored internally in the underlying Darknet network object
     /*! This version expects a Darknet image input, RGB float planar normalized to [0..1], with same dims as network
         input dims. Returns the prediction time (neural net forward pass) in milliseconds. Throws std::logic_error if
@@ -137,7 +137,7 @@ class Yolo : public jevois::Component,
         only works with fully convolutional networks. Note that the number of channels cannot be changed at this
         time. Throws std::logic_error if the network is still loading and not ready. */
     void resizeInDims(int w, int h);
-    
+
     //! Get input width, height, channels
     /*! Throws std::logic_error if the network is still loading and not ready. */
     void getInDims(int & w, int & h, int & c) const;
@@ -145,10 +145,11 @@ class Yolo : public jevois::Component,
     // We leave these in the open in case one wants to access the probs, names, etc but just be careful with them
     network * net;
     char ** names = nullptr;
-    box * boxes = nullptr;
+/*    box * boxes = nullptr; //superceded by dets
     float ** probs = nullptr;
-    int classes;
-    
+*/
+    int classes;// keep classes
+    detection * dets = nullptr; //pdq added
   protected:
     std::future<void> itsReadyFut;
     std::atomic<bool> itsReady;
