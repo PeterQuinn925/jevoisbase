@@ -158,12 +158,11 @@ void Yolo::computeBoxes(int inw, int inh)
         for (int j = 0; j < l.w * l.h * l.n; ++j) Yolo::probs[j] = (float *)calloc(l.classes + 1, sizeof(float));
   } */
 
-  if (dets = nullptr)
+  if (dets == nullptr)
 {
   dets = ( struct detection * )calloc(l.w * l.h * l.n, sizeof(detection)); /*added pdq*/
   for (int j = 0; j < l.w * l.h * l.n; ++j) dets[j].prob = (float *)calloc(l.classes + 1, sizeof(float));
 }
-get_detection_detections(l, inw, inh, thresh::get()*0.01F, dets);
   get_region_detections(l, inw, inh, net->w, net->h, thresh::get()*0.01F, l.map, hierthresh::get()*0.01F, 1, dets);
   /* pdq code change for yolov3
 was
